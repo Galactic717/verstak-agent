@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -6,7 +7,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from verstak.config import settings
-from verstak.contracts import RunStatus
+from verstak.contracts import GroundingReview, RunStatus
 from verstak.db import CaseAction, DeadLetter, ModelAttempt, Run, sessions
 
 RUNNABLE = ("queued", "running")
@@ -22,7 +23,13 @@ async def tenant_run(
     return await session.scalar(query)
 
 
-async def lease_due_runs() -> list[UUID]:
+@dataclass(frozen=True)
+class Dispatch:
+    run_id: UUID
+    traceparent: str | None
+
+
+async def lease_due_runs() -> list[Dispatch]:
     async with sessions().begin() as session:
         query = (
             select(Run)
@@ -35,7 +42,7 @@ async def lease_due_runs() -> list[UUID]:
         deadline = datetime.now(UTC) + timedelta(seconds=settings().dispatch_lease_seconds)
         for run in runs:
             run.dispatch_after = deadline
-        return [run.id for run in runs]
+        return [Dispatch(run.id, run.traceparent) for run in runs]
 
 
 class RunLimit(Exception):
@@ -74,15 +81,41 @@ async def settle_attempt(
             attempt.charged_micros = charge
             attempt.input_tokens = input_tokens
             attempt.output_tokens = output_tokens
-        within_budget = run.cost_micros <= run.budget_micros
-        if within_budget:
-            run.triage = triage
-        return within_budget
+            if run.cost_micros <= run.budget_micros:
+                attempt.proposal = triage
+        return run.cost_micros <= run.budget_micros
 
 
-async def saved_triage(run_id: UUID) -> dict[str, object] | None:
+@dataclass(frozen=True)
+class Proposal:
+    sequence: int | None
+    fields: dict[str, object]
+
+
+async def saved_proposal(run_id: UUID) -> Proposal | None:
     async with sessions()() as session:
-        return await session.scalar(select(Run.triage).where(Run.id == run_id))
+        run = await session.get_one(Run, run_id)
+        attempt = await session.get(ModelAttempt, (run_id, run.attempts))
+        if attempt is not None and attempt.proposal is not None:
+            if attempt.verification is None or attempt.verification.get("accepted") is True:
+                return Proposal(attempt.sequence, attempt.proposal)
+        if run.triage is not None and run.verification is None:
+            # In-flight runs created before this migration may already have a settled proposal.
+            return Proposal(None, run.triage)
+        return None
+
+
+async def record_verification(
+    run_id: UUID, sequence: int | None, fields: dict[str, object], review: GroundingReview
+) -> None:
+    report = review.model_dump(mode="json")
+    async with sessions().begin() as session:
+        run = await session.get_one(Run, run_id, with_for_update=True)
+        if sequence is not None:
+            attempt = await session.get_one(ModelAttempt, (run_id, sequence))
+            attempt.verification = report
+        run.verification = report
+        run.triage = fields if review.accepted else None
 
 
 async def apply_case(run_id: UUID, tenant: str, tool: str, payload: dict[str, object]) -> None:

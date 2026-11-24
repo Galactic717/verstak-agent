@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://127.0.0.1:56379/0"
     jwt_secret: str = Field(default="", repr=False)
     clients_json: str = Field(default="{}", repr=False)
+    metrics_token: str = Field(default="", repr=False)
     token_seconds: int = Field(default=3600, ge=60, le=86400)
     rate_capacity: int = Field(default=30, ge=1)
     rate_per_minute: int = Field(default=30, ge=1)

@@ -45,6 +45,14 @@ class RunReceipt(BaseModel):
     id: UUID
 
 
+GroundingFinding = Literal["reference_not_in_source", "payment_not_in_source"]
+
+
+class GroundingReview(BaseModel):
+    accepted: bool
+    findings: list[GroundingFinding]
+
+
 class RunView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -52,6 +60,7 @@ class RunView(BaseModel):
     workflow: Literal["triage"] = "triage"
     status: RunStatus
     triage: dict[str, object] | None
+    verification: GroundingReview | None = None
     approved: bool | None
     approved_by: str | None
     attempts: int

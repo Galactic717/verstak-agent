@@ -64,6 +64,8 @@ class Run(Base):
     attempts: Mapped[int] = mapped_column(server_default="0")
     worker_failures: Mapped[int] = mapped_column(server_default="0")
     triage: Mapped[dict[str, object] | None] = mapped_column(JSONB(none_as_null=True))
+    verification: Mapped[dict[str, object] | None] = mapped_column(JSONB(none_as_null=True))
+    traceparent: Mapped[str | None] = mapped_column(String(55))
     approved: Mapped[bool | None]
     approved_by: Mapped[str | None] = mapped_column(String(200))
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -92,6 +94,8 @@ class ModelAttempt(Base):
     charged_micros: Mapped[int | None] = mapped_column(BigInteger)
     input_tokens: Mapped[int | None]
     output_tokens: Mapped[int | None]
+    proposal: Mapped[dict[str, object] | None] = mapped_column(JSONB(none_as_null=True))
+    verification: Mapped[dict[str, object] | None] = mapped_column(JSONB(none_as_null=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

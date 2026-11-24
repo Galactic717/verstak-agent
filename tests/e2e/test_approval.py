@@ -67,6 +67,8 @@ def test_triage_approval_from_running_stack(
 
     run_url = f"{stack_url}/runs/{run_id}"
     wait_for_status(page.request, run_url, headers, "waiting_approval")
+    proposal = page.request.get(run_url, headers=headers)
+    assert proposal.json()["verification"] == {"accepted": True, "findings": []}
     decision = page.request.post(
         f"{stack_url}/approvals/{run_id}", headers=headers, data={"approved": approved}
     )

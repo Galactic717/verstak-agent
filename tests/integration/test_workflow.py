@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
@@ -131,8 +132,8 @@ async def test_dispatch_leases_and_redis_quota(
     )
     assert response.status_code == 429
     assert int(response.headers["Retry-After"]) > 0
-    assert run_id in await lease_due_runs()
-    assert run_id not in await lease_due_runs()
+    assert run_id in {dispatch.run_id for dispatch in await lease_due_runs()}
+    assert run_id not in {dispatch.run_id for dispatch in await lease_due_runs()}
 
 
 @pytest.mark.chaos
@@ -206,6 +207,57 @@ async def test_malformed_output_corrected_and_step_limit_enforced(
 
 
 @pytest.mark.chaos
+@pytest.mark.parametrize(
+    "fault,field",
+    [
+        ({"reference": "INV-104"}, "reference"),
+        ({"reference": "INV-10420"}, "reference"),
+        ({"reference": "REQ-1042"}, "reference"),
+        ({"amount_cents": 0}, "amount"),
+        ({"amount_cents": 120}, "amount"),
+        ({"amount_cents": 12001}, "amount"),
+        ({"currency": "EUR"}, "currency"),
+        ({"currency": "GBP"}, "currency"),
+        ({"currency": "UAH"}, "currency"),
+        ({"reference": "INV-9999", "amount_cents": 19999}, "reference"),
+    ],
+)
+async def test_evidence_agent_requests_correction_before_human_review(
+    client: httpx.AsyncClient,
+    fault: dict[str, object],
+    field: str,
+) -> None:
+    run_id = await start(client, max_steps=2)
+    valid = await Router.from_env().classify(INVOICE, "", "")
+    ungrounded = replace(valid, triage=valid.triage.model_copy(update=fault))
+    with patch.object(Router, "classify", AsyncMock(side_effect=[ungrounded, valid])) as model:
+        await process_run(run_id)
+    assert model.await_count == 2
+    assert field in model.await_args.args[-1]
+    result = await status(client, run_id)
+    assert result["status"] == "waiting_approval"
+    assert result["triage"]["reference"] == "INV-1042"
+    assert result["verification"] == {"accepted": True, "findings": []}
+    assert await action_count(run_id) == 0
+
+
+@pytest.mark.chaos
+async def test_unverified_payment_cannot_reach_approval(client: httpx.AsyncClient) -> None:
+    run_id = await start(client, max_steps=3)
+    valid = await Router.from_env().classify(INVOICE, "", "")
+    ungrounded = replace(valid, triage=valid.triage.model_copy(update={"amount_cents": 19999}))
+    with patch.object(Router, "classify", AsyncMock(return_value=ungrounded)) as model:
+        await process_run(run_id)
+    result = await status(client, run_id)
+    assert model.await_count == result["attempts"] == 3
+    assert (result["status"], result["error"]) == ("failed", "ungrounded_model_output")
+    assert result["triage"] is None
+    assert result["verification"] == {"accepted": False, "findings": ["payment_not_in_source"]}
+    assert (await client.post(f"/approvals/{run_id}", json={"approved": True})).status_code == 409
+    assert await action_count(run_id) == 0
+
+
+@pytest.mark.chaos
 async def test_budget_rejection_happens_before_provider_call(client: httpx.AsyncClient) -> None:
     run_id = await start(client, max_budget_usd="0.000002")
     with (
@@ -256,7 +308,9 @@ async def test_crash_after_model_settlement_uses_the_saved_result(
     assert run["triage"]["tool"] == "record_invoice"
 
 
-async def test_evaluation_digest_and_metrics(client: httpx.AsyncClient) -> None:
+async def test_evaluation_digest_and_metrics(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sent = {
         "provider": "fixture",
         "cases": 30,
@@ -275,3 +329,10 @@ async def test_evaluation_digest_and_metrics(client: httpx.AsyncClient) -> None:
     assert response.status_code == 200, response.text
     assert "verstak_eval_tool_f1" in response.text
     assert "verstak_http_request_duration_seconds_bucket" in response.text
+    monkeypatch.setenv("VERSTAK_METRICS_TOKEN", "private-monitoring-token")
+    settings.cache_clear()
+    assert (await client.get("/metrics")).status_code == 401
+    authorized = await client.get(
+        "/metrics", headers={"Authorization": "Bearer private-monitoring-token"}
+    )
+    assert authorized.status_code == 200
