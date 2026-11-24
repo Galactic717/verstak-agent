@@ -105,17 +105,14 @@ uv run pytest tests/unit
 docker compose exec -T api verstak-eval
 ```
 
-The same evaluator accepts a configured OpenAI-compatible, Anthropic, or Gemini endpoint, including a local vLLM or Ollama server via its compatible API. See the 30-case corpus, model configuration, metric definitions, and report upload. [Evaluation guide](evals/README.md)
+Both Qwen models ran locally in Ollama with a four-CPU limit against the same 30 synthetic cases. The fixture is a rules-based baseline. Each latency measures one classification call.
 
-| Measured with the bundled fixture | Result |
-| --- | ---: |
-| Golden cases | 30 |
-| Tool-call F1 | 0.9333 |
-| Schema validity | 100% |
-| Grounded field accuracy | 96.67% |
-| p95 classification latency in the local Linux container | 0.0224 ms |
-| Estimated model cost per 1,000 classifications | $0.00 |
+| Local provider | Tool-call F1 | Schema validity | Grounded field accuracy | p95 latency |
+| --- | ---: | ---: | ---: | ---: |
+| Rules fixture | 0.9333 | 100% | 96.67% | 0.0518 ms |
+| Qwen3-1.7B Q4_K_M | 0.7586 | 93.33% | 46.67% | 8.60 s |
+| Qwen3-4B Q4_K_M | 0.9153 | 96.67% | 96.67% | 14.23 s |
 
-Fixture results measure classification only. Use the emitted report for p95 latency on your machine. The benchmark guide includes local Qwen runs using the same golden cases.
+The local runs incurred $0 in API fees. [Evaluation method and raw reports](evals/README.md)
 
 Local verification passed 78 Python tests at 87.13% line coverage, two Playwright scenarios, and a Jaeger trace smoke test against the Linux Compose stack. All 10 injected post-action failures recovered with one case action per run. All 10 injected evidence errors reached human review after a single correction using the fixture provider. A separate live smoke test killed the worker while approval was pending, then resumed the run with one model attempt and one case action. GitHub Actions runs the integration, failure-injection, Gherkin, browser, and trace suites.
