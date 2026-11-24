@@ -1,0 +1,15 @@
+services:
+  api:
+    environment:
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://jaeger:4318/v1/traces
+  worker:
+    environment:
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://jaeger:4318/v1/traces
+  jaeger:
+    image: jaegertracing/jaeger:2.12.0
+    command: ["--config", "/etc/jaeger/config.yml"]
+    volumes:
+      - ./monitoring/jaeger.yml:/etc/jaeger/config.yml:ro
+    ports:
+      - "127.0.0.1:${VERSTAK_JAEGER_PORT:-16686}:16686"
+      - "127.0.0.1:${VERSTAK_OTLP_PORT:-4318}:4318"
