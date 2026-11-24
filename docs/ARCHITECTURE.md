@@ -1,6 +1,6 @@
 # Architecture
 
-verstak-agent turns a tenant's inbound request into a typed proposal and a human-approved database action. The API and MCP server are stateless. A Redis message makes a run eligible for execution, while PostgreSQL holds the authoritative state for dispatch, approval, checkpoints, and effects.
+verstak-agent turns a tenant's inbound request into a typed proposal, a source-grounded evidence review, and a human-approved database action. The API and MCP server are stateless. A Redis message makes a run eligible for execution, while PostgreSQL holds the authoritative state for dispatch, verification, approval, checkpoints, and effects.
 
 ## Data flow
 
@@ -18,6 +18,8 @@ sequenceDiagram
     Worker->>PG: Acquire run advisory lock
     Worker->>Graph: Classify with tenant document context
     Graph->>PG: Reserve cost, persist result, save checkpoint
+    Graph->>PG: Persist source evidence review
+    Note over Graph: Unsupported fields trigger a bounded correction
     Graph-->>Worker: Interrupt for review
     Worker->>PG: Mark waiting_approval
     Client->>API: Approve or reject
@@ -29,7 +31,9 @@ sequenceDiagram
 
 One transaction inserts the submission and dispatch timestamp. Conflicting submissions with the same tenant and idempotency key return HTTP 409 when the normalized request fingerprints differ. Redis carries run IDs. If a broker delivery disappears or the dispatcher loses its connection after committing a lease, a later tick picks up the due row.
 
-The worker holds a PostgreSQL advisory lock for each run using a dedicated connection. LangGraph saves state with synchronous checkpoint durability and uses the run ID as its thread ID. The validation result and cost settlement commit together. A restart after settlement can reuse that result even when the run has no call slots remaining. A worker may still lose a provider response before settlement, in which case the reservation stays charged against the run's allowance. [LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)
+The worker holds a PostgreSQL advisory lock for each run using a dedicated connection. LangGraph saves state with synchronous checkpoint durability and uses the run ID as its thread ID. Each typed proposal commits with its cost settlement. A restart after settlement can reuse the proposal even when the run has no call slots remaining. A worker may still lose a provider response before settlement, in which case the reservation stays charged against the run's allowance. [LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)
+
+The independent evidence agent checks references as complete tokens and looks for the proposed amount and currency together in the submitted text or attached document. The graph stores both the review and the accepted proposal before the approval interrupt. Unsupported values produce field-specific retry feedback within the same model-call and budget limits. The approver evaluates the proposal's category, summary, and business context. Retrieved knowledge provides classification context while the submitted source supplies evidence for action-driving fields.
 
 Model proposals pick one of three fixed case types. An approval transaction locks the run, checks the authenticated tenant and approval scope, records the deciding identity, and queues the resume. An identical repeat returns the saved decision. The action uses a unique run ID, so replay after a successful action transaction can complete the workflow without a second record.
 
@@ -57,6 +61,8 @@ erDiagram
         int sequence PK
         bigint reserved_micros
         bigint charged_micros
+        json proposal
+        json verification
     }
     CASE_ACTIONS {
         uuid run_id PK, FK
@@ -84,10 +90,13 @@ Documents are parsed within file, page, row, and extracted-text limits. PDF extr
 | PostgreSQL drops a connection | A failed transaction rolls back. After PostgreSQL returns, the run is eligible through its lease or retry deadline. |
 | Provider times out or returns a retryable HTTP response | The worker records a retry deadline and backs off exponentially. Stale deliveries honor the deadline. Existing reservations count toward the budget. |
 | Model produces invalid structured output | Up to two corrections fit within a three-call run limit. Exhaustion records a failed run and a dead-letter row. |
+| A structurally valid proposal contains an unsupported reference, amount, or currency | The evidence agent records the finding and requests a correction. Only an accepted proposal is exposed for approval. |
 | The next reservation exceeds the run budget | The worker stops before sending the model request. Provider pricing and billed-token behavior affect estimates. |
 | Reviewer denies the proposal | The run becomes `rejected` and no case action is inserted. |
 
 The local case write uses a PostgreSQL primary key as its idempotency boundary. For future external side effects, the downstream service must honor its own idempotency key or provide reconciliation.
+
+The optional OpenTelemetry exporter links HTTP submission to dispatch and worker spans through the durable outbox. After human review, a span link connects the new approval/resume trace to the submission trace. [Trace setup](TRACING.md)
 
 ## Threat model
 
