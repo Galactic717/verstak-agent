@@ -1,0 +1,9 @@
+{
+  "provider": "ollama:qwen3:1.7b-q4_K_M",
+  "cases": 30,
+  "tool_f1": 0.7586,
+  "schema_validity": 0.9333,
+  "grounded_accuracy": 0.4667,
+  "p95_latency_ms": 8604.7235,
+  "cost_per_1000_usd": null
+}
