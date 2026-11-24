@@ -1,0 +1,380 @@
+{
+  "id": "VerstakSheets02",
+  "name": "Verstak · Excel to Google Sheets",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "verstak/workbook",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "8e71728e-1b74-4889-9846-9fc45395cbf9",
+      "name": "Workbook webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Verstak intake webhook"
+        }
+      },
+      "webhookId": "8e71728e-1b74-4889-9846-9fc45395cbf9"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1219bda1-9773-4f13-ae21-d175f5f635a1-condition",
+              "leftValue": "={{ typeof $json.headers['idempotency-key'] === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test($json.headers['idempotency-key']) && !!$binary.file }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1219bda1-9773-4f13-ae21-d175f5f635a1",
+      "name": "Event key and file present",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { detail: 'Upload one XLSX or CSV in multipart field file and send an Idempotency-Key (1–80 letters, digits, dashes, or underscores).' } }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "0c41dacc-281d-4a4a-8b44-119ba134e71b",
+      "name": "Reject bad upload",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        480,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oauth2Api",
+        "method": "POST",
+        "url": "http://api:8000/documents",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "file"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "0cd16d86-b2a8-4166-8c37-21fcdd280d54",
+      "name": "Parse workbook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ],
+      "credentials": {
+        "oauth2Api": {
+          "name": "Verstak API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "da98b6dc-d2ea-4d23-a054-4f2ffbf10bd4-condition",
+              "leftValue": "={{ $json.statusCode >= 200 && $json.statusCode < 300 && Array.isArray($json.body.tabular) && $json.body.tabular.some(sheet => sheet.rows.length > 0) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "da98b6dc-d2ea-4d23-a054-4f2ffbf10bd4",
+      "name": "Has spreadsheet rows",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.statusCode >= 400 ? $json.body : { detail: 'The file contains no spreadsheet rows.' } }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode >= 400 ? $json.statusCode : 422 }}"
+        }
+      },
+      "id": "9666a225-3085-4dfe-9538-e85264af5a07",
+      "name": "Return upload error or empty result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        960,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const eventKey = $('Workbook webhook').first().json.headers['idempotency-key'];\nconst document = $input.first().json.body;\nreturn document.tabular.flatMap(sheet => sheet.rows.map((data, index) => ({\n  json: {\n    source_key: JSON.stringify([eventKey, sheet.sheet, index + 1]),\n    document_id: document.id,\n    sheet: sheet.sheet,\n    row: index + 1,\n    row_json: JSON.stringify(data),\n  },\n})));"
+      },
+      "id": "a9687400-5a84-4894-86f4-018b4b8c08fd",
+      "name": "Build sheet rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "sheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Verstak Imports",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": null,
+          "matchingColumns": [
+            "source_key"
+          ],
+          "schema": [
+            {
+              "id": "source_key",
+              "displayName": "source_key",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "document_id",
+              "displayName": "document_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sheet",
+              "displayName": "sheet",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row",
+              "displayName": "row",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_json",
+              "displayName": "row_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW",
+          "handlingExtraData": "ignoreIt"
+        }
+      },
+      "id": "8dcff533-803c-47c9-8485-4bf6734e777b",
+      "name": "Upsert sheet rows",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1200,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "name": "Verstak Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { document_id: $('Parse workbook').first().json.body.id, rows: $('Build sheet rows').all().length } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "0870d1e5-af13-4c21-9ae0-ba4dd20586d0",
+      "name": "Return import receipt",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1440,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Workbook webhook": {
+      "main": [
+        [
+          {
+            "node": "Event key and file present",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Event key and file present": {
+      "main": [
+        [
+          {
+            "node": "Parse workbook",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject bad upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse workbook": {
+      "main": [
+        [
+          {
+            "node": "Has spreadsheet rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has spreadsheet rows": {
+      "main": [
+        [
+          {
+            "node": "Build sheet rows",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return upload error or empty result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build sheet rows": {
+      "main": [
+        [
+          {
+            "node": "Upsert sheet rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert sheet rows": {
+      "main": [
+        [
+          {
+            "node": "Return import receipt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 180
+  },
+  "pinData": {},
+  "tags": []
+}
