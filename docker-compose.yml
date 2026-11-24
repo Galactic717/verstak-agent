@@ -1,0 +1,155 @@
+name: verstak-agent
+
+x-verstak: &verstak
+  build: .
+  image: verstak-agent:local
+  init: true
+  environment: &verstak-environment
+    VERSTAK_DATABASE_URL: postgresql://verstak:${POSTGRES_PASSWORD:?Copy .env.example to .env}@postgres:5432/verstak
+    VERSTAK_REDIS_URL: redis://redis:6379/0
+    VERSTAK_JWT_SECRET: ${VERSTAK_JWT_SECRET:?Copy .env.example to .env}
+    VERSTAK_CLIENTS_JSON: ${VERSTAK_CLIENTS_JSON:?Copy .env.example to .env}
+    OTEL_SERVICE_NAME: verstak-agent
+
+x-dependencies: &dependencies
+  migrate:
+    condition: service_completed_successfully
+  redis:
+    condition: service_healthy
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.1-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: verstak
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Copy .env.example to .env}
+      POSTGRES_DB: verstak
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U verstak -d verstak"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7.4.7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    ports:
+      - "127.0.0.1:56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    <<: *verstak
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *verstak
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on: *dependencies
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2).close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    <<: *verstak
+    restart: unless-stopped
+    command: ["celery", "-A", "verstak.workers:app", "worker", "--pool=solo", "-l", "INFO"]
+    environment:
+      <<: *verstak-environment
+      VERSTAK_LLM_PROVIDER: ${VERSTAK_LLM_PROVIDER:-fixture}
+      VERSTAK_LLM_URL: ${VERSTAK_LLM_URL:-}
+      VERSTAK_LLM_MODEL: ${VERSTAK_LLM_MODEL:-}
+      VERSTAK_LLM_API_KEY: ${VERSTAK_LLM_API_KEY:-}
+      VERSTAK_LLM_TIMEOUT_SECONDS: ${VERSTAK_LLM_TIMEOUT_SECONDS:-30}
+      VERSTAK_LLM_MAX_OUTPUT_TOKENS: ${VERSTAK_LLM_MAX_OUTPUT_TOKENS:-512}
+      VERSTAK_LLM_INPUT_USD_PER_MILLION: ${VERSTAK_LLM_INPUT_USD_PER_MILLION:-0}
+      VERSTAK_LLM_OUTPUT_USD_PER_MILLION: ${VERSTAK_LLM_OUTPUT_USD_PER_MILLION:-0}
+    depends_on: *dependencies
+
+  beat:
+    <<: *verstak
+    restart: unless-stopped
+    command: ["celery", "-A", "verstak.workers:app", "beat", "--schedule", "/tmp/celerybeat-schedule", "-l", "INFO"]
+    depends_on: *dependencies
+
+  mcp:
+    <<: *verstak
+    restart: unless-stopped
+    command: ["verstak-mcp", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      VERSTAK_API_URL: http://api:8000
+      VERSTAK_MCP_ALLOWED_HOSTS: localhost:8001,127.0.0.1:8001,mcp:8001
+    ports:
+      - "127.0.0.1:8001:8001"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  n8n:
+    image: n8nio/n8n:2.18.4
+    restart: unless-stopped
+    environment:
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Copy .env.example to .env}
+      N8N_SECURE_COOKIE: "false"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "true"
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
+      EXECUTIONS_DATA_SAVE_ON_ERROR: none
+      EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS: "false"
+      WEBHOOK_URL: http://localhost:5678/
+    volumes:
+      - n8n-data:/home/node/.n8n
+      - ./n8n_workflows:/opt/verstak/workflows:ro
+    ports:
+      - "127.0.0.1:5678:5678"
+
+  prometheus:
+    image: prom/prometheus:v3.5.1
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  grafana:
+    image: grafana/grafana:12.2.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Copy .env.example to .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  postgres-data:
+  redis-data:
+  n8n-data:
+  prometheus-data:
+  grafana-data:
