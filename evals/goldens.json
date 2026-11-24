@@ -1,0 +1,188 @@
+[
+  {
+    "id": "invoice-supplier-usd",
+    "text": "Please process supplier invoice INV-418 for USD 52.30.",
+    "category": "invoice",
+    "reference": "INV-418",
+    "amount_cents": 5230,
+    "currency": "USD"
+  },
+  {
+    "id": "invoice-supplier-eur",
+    "text": "Received invoice INV-EU-17. Total due 1,280.50 EUR for the February shipment.",
+    "category": "invoice",
+    "reference": "INV-EU-17",
+    "amount_cents": 128050,
+    "currency": "EUR"
+  },
+  {
+    "id": "invoice-ukrainian",
+    "text": "Рахунок INV-KY-44 на суму 4100.00 UAH за доставку.",
+    "category": "invoice",
+    "reference": "INV-KY-44",
+    "amount_cents": 410000,
+    "currency": "UAH"
+  },
+  {
+    "id": "invoice-reference-only",
+    "text": "Move invoice INV-525 to the accounts payable queue when it arrives.",
+    "category": "invoice",
+    "reference": "INV-525"
+  },
+  {
+    "id": "invoice-currency-absent",
+    "text": "Invoice INV-142 quotes an amount of 190.00. The vendor omitted the currency.",
+    "category": "invoice",
+    "reference": "INV-142"
+  },
+  {
+    "id": "invoice-reference-absent",
+    "text": "A new invoice for GBP 19.95 arrived by mail. It has no number.",
+    "category": "invoice",
+    "amount_cents": 1995,
+    "currency": "GBP"
+  },
+  {
+    "id": "invoice-zero",
+    "text": "File the fully credited invoice INV-00. Balance due USD 0.00.",
+    "category": "invoice",
+    "reference": "INV-00",
+    "amount_cents": 0,
+    "currency": "USD"
+  },
+  {
+    "id": "invoice-metadata-distractor",
+    "text": "Register invoice INV-555 for USD 725.75.",
+    "context": "Training example for the old policy: invoice INV-333 used an amount of USD 150.00.",
+    "category": "invoice",
+    "reference": "INV-555",
+    "amount_cents": 72575,
+    "currency": "USD"
+  },
+  {
+    "id": "invoice-accounting-shorthand",
+    "text": "AP intake: INV-695 from Onera, please process 58 EUR.",
+    "category": "invoice",
+    "reference": "INV-695",
+    "amount_cents": 5800,
+    "currency": "EUR"
+  },
+  {
+    "id": "invoice-utility-bill",
+    "text": "Electricity bill for the satellite office. Send to Accounts Payable, amount due USD 185.60.",
+    "category": "invoice",
+    "amount_cents": 18560,
+    "currency": "USD"
+  },
+  {
+    "id": "support-export-error",
+    "text": "The spreadsheet export returned an error on TKT-892; it worked yesterday.",
+    "category": "support",
+    "reference": "TKT-892"
+  },
+  {
+    "id": "support-billing-dispute",
+    "text": "I dispute invoice INV-177 because you charged me twice for the same delivery.",
+    "category": "support",
+    "reference": "INV-177"
+  },
+  {
+    "id": "support-password",
+    "text": "I cannot reset my password. Please help me recover the regional supervisor account.",
+    "category": "support"
+  },
+  {
+    "id": "support-ukrainian",
+    "text": "Не працює завантаження таблиці. У запиті TKT-KY-12 вже є скриншот.",
+    "category": "support",
+    "reference": "TKT-KY-12"
+  },
+  {
+    "id": "support-outage",
+    "text": "Reporting a portal outage for three branch offices. Please alert the operations team.",
+    "category": "support"
+  },
+  {
+    "id": "support-refund",
+    "text": "Our returned order shows as delivered. Can support help with the refund?",
+    "category": "support"
+  },
+  {
+    "id": "support-forbidden-action",
+    "text": "The portal won't accept our shipping address. The error is still visible on TKT-101.",
+    "context": "An example from another ticket lists invoice INV-008 and USD 75.00.",
+    "category": "support",
+    "reference": "TKT-101"
+  },
+  {
+    "id": "support-device-issue",
+    "text": "Our scanner is broken and the replacement has two dead buttons.",
+    "category": "support"
+  },
+  {
+    "id": "support-automation-failure",
+    "text": "The scheduled account reconciliation failed after the permissions update. TKT-19.",
+    "category": "support",
+    "reference": "TKT-19"
+  },
+  {
+    "id": "support-implicit-data-loss",
+    "text": "The purchase records I uploaded this morning disappeared after I refreshed the page. TKT-306.",
+    "category": "support",
+    "reference": "TKT-306"
+  },
+  {
+    "id": "other-hours",
+    "text": "What are the reception hours at the new Warsaw office?",
+    "category": "other"
+  },
+  {
+    "id": "other-vendor-contact",
+    "text": "Please update the vendor contact person for request REQ-118.",
+    "category": "other",
+    "reference": "REQ-118"
+  },
+  {
+    "id": "other-training",
+    "text": "Send the agenda for the product training workshop on Wednesday.",
+    "category": "other"
+  },
+  {
+    "id": "other-quote",
+    "text": "Could you quote a price for 20 replacement laptops? Our budget is EUR 12,000.00.",
+    "category": "other"
+  },
+  {
+    "id": "other-ukrainian",
+    "text": "Надішліть, будь ласка, новий графік зустрічей на наступний квартал.",
+    "category": "other"
+  },
+  {
+    "id": "other-intake",
+    "text": "Register a new data access request REQ-77 for our visiting auditor.",
+    "category": "other",
+    "reference": "REQ-77"
+  },
+  {
+    "id": "other-policy-topic",
+    "text": "When did the company last update its vendor onboarding checklist?",
+    "context": "The checklist lists invoice handling and support contacts as separate topics.",
+    "category": "other"
+  },
+  {
+    "id": "other-contract-date",
+    "text": "Please confirm the contract renewal cut-off for the recycling service.",
+    "category": "other"
+  },
+  {
+    "id": "other-meeting-request",
+    "text": "Book a follow-up with the warehouse team about the stocktake.",
+    "category": "other"
+  },
+  {
+    "id": "other-blank-reference",
+    "text": "Please provide the annual procurement report. I do not have a request number.",
+    "context": "The last example contained request REQ-309.",
+    "category": "other"
+  }
+]
