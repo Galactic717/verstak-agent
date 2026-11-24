@@ -1,0 +1,462 @@
+{
+  "id": "VerstakTriage01",
+  "name": "Verstak · Triage and approval",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "verstak/triage",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "95c9573f-9a85-4483-b2fa-9138cf678ed3",
+      "name": "Triage webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Verstak intake webhook"
+        }
+      },
+      "webhookId": "95c9573f-9a85-4483-b2fa-9138cf678ed3"
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oauth2Api",
+        "method": "POST",
+        "url": "http://api:8000/workflows/triage/runs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $json.headers['idempotency-key'] ?? '' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.body }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "75678b1c-b9fd-4b39-aadf-669b2439bb9b",
+      "name": "Create triage run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "credentials": {
+        "oauth2Api": {
+          "name": "Verstak API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.body }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "id": "28a2412a-31e9-4e67-a922-56cc8d5cf7a9",
+      "name": "Return API response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "741ece23-a39d-4112-9f89-28bb979fc15c-condition",
+              "leftValue": "={{ $json.statusCode >= 200 && $json.statusCode < 300 && !!$json.body.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "741ece23-a39d-4112-9f89-28bb979fc15c",
+      "name": "Run accepted",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 3,
+        "unit": "seconds"
+      },
+      "id": "91e78286-6ef2-4d68-aa40-e87db46feecc",
+      "name": "Wait for worker",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oauth2Api",
+        "url": "={{ 'http://api:8000/runs/' + $('Create triage run').first().json.body.id }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "5d855231-caec-4e81-8438-6d242723f6b9",
+      "name": "Read triage state",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        0
+      ],
+      "credentials": {
+        "oauth2Api": {
+          "name": "Verstak API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "fb126db0-a666-4f3e-8f2b-bcbead1756f4-condition",
+              "leftValue": "={{ $json.status === 'waiting_approval' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "fb126db0-a666-4f3e-8f2b-bcbead1756f4",
+      "name": "Review pending",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "accessToken",
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SLACK_CHANNEL_ID",
+          "mode": "id"
+        },
+        "text": "={{ 'Verstak run ' + $json.id + ' needs approval.' + '\\nRead the proposal with GET /runs/' + $json.id + ' and send your decision to POST /webhook/verstak/approvals/' + $json.id + '.' }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false,
+          "unfurl_links": false
+        }
+      },
+      "id": "dce042d0-f4ca-4b91-a676-ef237deefd58",
+      "name": "Notify reviewers",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1680,
+        -120
+      ],
+      "credentials": {
+        "slackApi": {
+          "name": "Verstak Slack bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9e77730f-49eb-4e18-bfc4-900d746ab09e-condition",
+              "leftValue": "={{ $runIndex < 19 && ['queued', 'running'].includes($json.status) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "9e77730f-49eb-4e18-bfc4-900d746ab09e",
+      "name": "Continue polling",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1680,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "verstak/approvals/:run_id",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "0f7fa615-6112-402b-8eaa-30f4da0d261e",
+      "name": "Approval webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        420
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Verstak approval webhook"
+        }
+      },
+      "webhookId": "0f7fa615-6112-402b-8eaa-30f4da0d261e"
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oauth2Api",
+        "method": "POST",
+        "url": "={{ 'http://api:8000/approvals/' + encodeURIComponent($json.params.run_id) }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { approved: $json.body.approved } }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "8f65ab47-7c90-4e1f-a678-84090795ea32",
+      "name": "Persist reviewer decision",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        420
+      ],
+      "credentials": {
+        "oauth2Api": {
+          "name": "Verstak reviewer API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.body }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "id": "2157ed93-8927-4cb1-84f9-1a92d4624618",
+      "name": "Return approval response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        480,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "Triage webhook": {
+      "main": [
+        [
+          {
+            "node": "Create triage run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create triage run": {
+      "main": [
+        [
+          {
+            "node": "Return API response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Return API response": {
+      "main": [
+        [
+          {
+            "node": "Run accepted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run accepted": {
+      "main": [
+        [
+          {
+            "node": "Wait for worker",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Wait for worker": {
+      "main": [
+        [
+          {
+            "node": "Read triage state",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read triage state": {
+      "main": [
+        [
+          {
+            "node": "Review pending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review pending": {
+      "main": [
+        [
+          {
+            "node": "Notify reviewers",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Continue polling",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Continue polling": {
+      "main": [
+        [
+          {
+            "node": "Wait for worker",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Approval webhook": {
+      "main": [
+        [
+          {
+            "node": "Persist reviewer decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist reviewer decision": {
+      "main": [
+        [
+          {
+            "node": "Return approval response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 180
+  },
+  "pinData": {},
+  "tags": []
+}

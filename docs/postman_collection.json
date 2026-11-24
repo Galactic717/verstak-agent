@@ -1,0 +1,363 @@
+{
+  "info": {
+    "name": "Verstak Agent",
+    "description": "Local API collection for the Compose demo. Get a token, create a run, poll the run until waiting_approval, submit a decision, and poll for its final status.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "client_id",
+      "value": "demo"
+    },
+    {
+      "key": "client_secret",
+      "value": "verstak-demo-secret"
+    },
+    {
+      "key": "access_token",
+      "value": ""
+    },
+    {
+      "key": "idempotency_key",
+      "value": ""
+    },
+    {
+      "key": "previous_idempotency_key",
+      "value": ""
+    },
+    {
+      "key": "run_id",
+      "value": ""
+    },
+    {
+      "key": "document_id",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/healthz",
+        "auth": {
+          "type": "noauth"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Get demo access token",
+      "request": {
+        "method": "POST",
+        "url": "{{base_url}}/oauth/token",
+        "auth": {
+          "type": "noauth"
+        },
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "grant_type",
+              "value": "client_credentials",
+              "type": "text"
+            },
+            {
+              "key": "client_id",
+              "value": "{{client_id}}",
+              "type": "text"
+            },
+            {
+              "key": "client_secret",
+              "value": "{{client_secret}}",
+              "type": "text"
+            }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.response.code === 200) {",
+              "  pm.collectionVariables.set(\"access_token\", pm.response.json().access_token);",
+              "}"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Triage",
+      "item": [
+        {
+          "name": "Create triage run",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/workflows/triage/runs",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotency_key}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Please record invoice INV-042 for USD 125.50.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Stores the run ID for subsequent status and approval requests. Clear the collection's idempotency_key variable to start a new run."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (!pm.collectionVariables.get(\"idempotency_key\")) {",
+                  "  pm.collectionVariables.set(\"idempotency_key\", pm.variables.replaceIn(\"postman-{{$guid}}\"));",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Response is successful\", () => pm.expect(pm.response.code).to.be.within(200, 299));",
+                  "const previous = pm.collectionVariables.get(\"run_id\");",
+                  "const previousKey = pm.collectionVariables.get(\"previous_idempotency_key\");",
+                  "const currentKey = pm.collectionVariables.get(\"idempotency_key\");",
+                  "const run = pm.response.json();",
+                  "if (previous && previousKey === currentKey) {",
+                  "  pm.test(\"Replay returned the same run\", () => pm.expect(run.id).to.eql(previous));",
+                  "}",
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  pm.collectionVariables.set(\"run_id\", run.id);",
+                  "  pm.collectionVariables.set(\"previous_idempotency_key\", currentKey);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read triage run",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/runs/{{run_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Submit reviewer decision",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/approvals/{{run_id}}",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"approved\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Wait for waiting_approval in Read triage run before submitting. Change approved to false to test rejection on a fresh run."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Response is successful\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Documents",
+      "item": [
+        {
+          "name": "Upload PDF, CSV, or XLSX",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/documents",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "description": "Select a local document for the file field before sending."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Response is successful\", () => pm.expect(pm.response.code).to.be.within(200, 299));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  pm.collectionVariables.set(\"document_id\", pm.response.json().id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read uploaded document",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/documents/{{document_id}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Search knowledge",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/knowledge/search?q=invoice"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Evaluation and cost summary",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/evals"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Prometheus metrics",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/metrics",
+        "auth": {
+          "type": "noauth"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,113 @@
+{
+  "id": "VerstakDigest03",
+  "name": "Verstak · Daily evaluation and cost digest",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "c55a0020-8567-457e-b6ce-249dc24f4802",
+      "name": "Daily at 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oauth2Api",
+        "url": "http://api:8000/evals",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "4eaabce8-aa94-4758-80d2-ed15207c9eef",
+      "name": "Read eval summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "credentials": {
+        "oauth2Api": {
+          "name": "Verstak API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "accessToken",
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SLACK_CHANNEL_ID",
+          "mode": "id"
+        },
+        "text": "={{ 'Verstak evaluation and cost digest\\n' + JSON.stringify($json, null, 2).slice(0, 2600) }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false,
+          "unfurl_links": false
+        }
+      },
+      "id": "d2febc50-04a2-406c-b5a2-e6de1f045fec",
+      "name": "Send daily digest",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        480,
+        0
+      ],
+      "credentials": {
+        "slackApi": {
+          "name": "Verstak Slack bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily at 09:00": {
+      "main": [
+        [
+          {
+            "node": "Read eval summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read eval summary": {
+      "main": [
+        [
+          {
+            "node": "Send daily digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 180
+  },
+  "pinData": {},
+  "tags": []
+}

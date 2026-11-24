@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      VERSTAK_DATABASE_URL: postgresql://verstak:verstak-demo-db-password@127.0.0.1:55432/verstak
+      VERSTAK_REDIS_URL: redis://127.0.0.1:56379/0
+      VERSTAK_TEST_DATABASE_URL: postgresql://verstak:verstak-demo-db-password@127.0.0.1:55432/verstak
+      VERSTAK_TEST_REDIS_URL: redis://127.0.0.1:56379/0
+      VERSTAK_JWT_SECRET: ci-only-signing-secret-do-not-use-outside-ci
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked --python 3.12
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy --strict src/verstak
+      - name: Start test dependencies
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          docker compose up -d --wait postgres redis
+          uv run alembic upgrade head
+      - name: Run Python tests
+        run: uv run pytest --ignore=tests/e2e --cov=verstak --cov-report=term-missing --cov-fail-under=85
+      - name: Smoke test the Linux image and Compose services
+        run: docker compose up -d --build --wait --wait-timeout 120 api worker beat mcp
+      - name: Install Chromium
+        run: uv run playwright install --with-deps chromium
+      - name: Run browser smoke tests
+        env:
+          VERSTAK_E2E_BASE_URL: http://127.0.0.1:8000
+        run: uv run pytest tests/e2e
+      - name: Collect service status on failure
+        if: failure()
+        run: |
+          docker compose ps --all
+          docker compose logs --no-color --tail 100
+      - name: Stop Compose services
+        if: always()
+        run: docker compose down --timeout 10
