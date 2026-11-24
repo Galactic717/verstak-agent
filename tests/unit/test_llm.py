@@ -9,6 +9,42 @@ import pytest
 from verstak.llm import InvalidModelOutput, PermanentModelError, Router, TransientModelError
 
 
+def test_ollama_uses_native_chat_with_bounded_structured_output() -> None:
+    def send(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert request.url.path == "/api/chat"
+        assert payload["stream"] is False
+        assert payload["think"] is False
+        assert payload["options"]["num_predict"] == 128
+        assert payload["options"]["temperature"] == 0
+        assert payload["format"]["properties"]["category"]["type"] == "string"
+        return httpx.Response(
+            200,
+            json={
+                "message": {
+                    "content": '{"category":"other","tool":"record_request","summary":"Question"}',
+                },
+                "done": True,
+                "prompt_eval_count": 21,
+                "eval_count": 6,
+            },
+        )
+
+    router = Router(
+        provider="ollama",
+        url="http://127.0.0.1:11434/api/chat",
+        model="qwen3:4b-q4_K_M",
+        max_output_tokens=128,
+        transport=httpx.MockTransport(send),
+    )
+    result = asyncio.run(router.classify("Contact details", "", ""))
+
+    assert result.triage.tool == "record_request"
+    assert result.input_tokens == 21
+    assert result.output_tokens == 6
+    assert result.cost_micros == 0
+
+
 def test_default_fixture_classifies_invoice_without_using_context_as_source() -> None:
     router = Router()
     result = asyncio.run(

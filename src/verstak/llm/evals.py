@@ -8,6 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from verstak.contracts import EvalReport as EvalSummary
+
 from .router import InvalidModelOutput, PermanentModelError, Router, TransientModelError
 from .triage import TOOL_BY_CATEGORY, Category, Tool
 
@@ -119,22 +121,58 @@ async def evaluate(router: Router, cases: list[GoldenCase]) -> EvalReport:
     )
 
 
+def compare_reports(reports: list[EvalSummary]) -> str:
+    if len(reports) < 2:
+        raise ValueError("Compare at least two evaluation reports")
+    if len({report.cases for report in reports}) != 1:
+        raise ValueError("Comparison reports must have the same case count")
+
+    table = [
+        "| Provider | Cases | Tool F1 | Schema validity | Grounded fields | P95 ms | USD / 1,000 |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for report in reports:
+        provider = " ".join(report.provider.split()).replace("\\", "\\\\").replace("|", r"\|")
+        cost = (
+            "Unreported" if report.cost_per_1000_usd is None else f"${report.cost_per_1000_usd:.6f}"
+        )
+        table.append(
+            f"| {provider} | {report.cases} | {report.tool_f1:.4f} | "
+            f"{report.schema_validity:.2%} | {report.grounded_accuracy:.2%} | "
+            f"{report.p95_latency_ms:.4f} | {cost} |"
+        )
+    return "\n".join(table) + "\n"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate triage against golden requests.")
     parser.add_argument("--cases", type=Path, help="Use a custom JSON case file.")
-    parser.add_argument("--output", type=Path, help="Also save the JSON report to a file.")
+    parser.add_argument("--output", type=Path, help="Also save the printed report to a file.")
     parser.add_argument("--details", type=Path, help="Save a separate JSON array of case results.")
+    parser.add_argument(
+        "--compare",
+        type=Path,
+        nargs="+",
+        metavar="REPORT",
+        help="Compare saved evaluation reports.",
+    )
     options = parser.parse_args()
     try:
-        router = Router.from_env()
-        cases = load_cases(options.cases)
-        scored = asyncio.run(evaluate(router, cases))
-        report = scored.model_dump_json(indent=2) + "\n"
+        if options.compare:
+            if options.cases or options.details:
+                parser.error("--cases and --details apply only when evaluating a provider")
+            reports = [
+                EvalSummary.model_validate_json(path.read_bytes()) for path in options.compare
+            ]
+            report = compare_reports(reports)
+        else:
+            scored = asyncio.run(evaluate(Router.from_env(), load_cases(options.cases)))
+            report = scored.model_dump_json(indent=2) + "\n"
+            if options.details:
+                details = TypeAdapter(list[CaseResult]).dump_json(scored.results, indent=2)
+                options.details.write_bytes(details + b"\n")
         if options.output:
             options.output.write_text(report, encoding="utf-8")
-        if options.details:
-            details = TypeAdapter(list[CaseResult]).dump_json(scored.results, indent=2)
-            options.details.write_bytes(details + b"\n")
     except (OSError, ValueError) as error:
         parser.error(str(error))
     print(report, end="")

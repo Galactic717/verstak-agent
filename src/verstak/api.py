@@ -1,3 +1,4 @@
+import hmac
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -6,7 +7,7 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from fastapi.security.utils import get_authorization_scheme_param
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Gauge, generate_latest
 from pydantic import BaseModel
 from redis.asyncio import Redis
@@ -24,14 +25,25 @@ from verstak.db import Evaluation, Run, get_session
 from verstak.documents import document_context
 from verstak.documents import router as document_router
 from verstak.limits import retry_after
-from verstak.observability import HTTP_LATENCY, HTTP_REQUESTS, configure_logging
+from verstak.observability import (
+    HTTP_LATENCY,
+    HTTP_REQUESTS,
+    configure_logging,
+    current_traceparent,
+    instrument_api,
+    trace_span,
+)
 from verstak.store import tenant_run
 
 configure_logging()
-app = FastAPI(title="verstak-agent", version="0.1.0")
+app = FastAPI(
+    title="verstak-agent",
+    version="0.1.0",
+    telemetry={"tracing": False, "metrics": False, "logs": False, "auto_configure": False},
+)
 app.include_router(auth_router)
 app.include_router(document_router)
-FastAPIInstrumentor.instrument_app(app, excluded_urls="healthz,metrics")
+instrument_api(app)
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 Reader = Annotated[Principal, Depends(require("runs:read"))]
@@ -112,6 +124,7 @@ async def submit(
                 document_id=body.document_id,
                 max_steps=body.max_steps,
                 budget_micros=body.budget_micros,
+                traceparent=current_traceparent(),
             )
             .on_conflict_do_nothing(constraint="uq_run_idempotency")
             .returning(Run)
@@ -170,13 +183,15 @@ async def decide(
             return RunView.model_validate(run)
         if run.status != "waiting_approval":
             raise HTTPException(409, "Run is not waiting for approval")
-        run.approved = body.approved
-        run.approved_by = principal.subject
-        run.approved_at = datetime.now(UTC)
-        run.dispatch_after = run.approved_at
-        run.status = "queued"
-        await session.flush()
-        await session.refresh(run)
+        with trace_span("workflow.approval", link=run.traceparent):
+            run.approved = body.approved
+            run.approved_by = principal.subject
+            run.approved_at = datetime.now(UTC)
+            run.dispatch_after = run.approved_at
+            run.status = "queued"
+            run.traceparent = current_traceparent()
+            await session.flush()
+            await session.refresh(run)
         return RunView.model_validate(run)
 
 
@@ -239,7 +254,14 @@ async def record_evaluation(
 
 
 @app.get("/metrics", include_in_schema=False)
-async def metrics(session: Session) -> Response:
+async def metrics(request: Request, session: Session) -> Response:
+    token = settings().metrics_token
+    if token:
+        scheme, supplied = get_authorization_scheme_param(request.headers.get("Authorization"))
+        if scheme.lower() != "bearer" or not hmac.compare_digest(supplied.encode(), token.encode()):
+            raise HTTPException(
+                401, "Invalid metrics credentials", headers={"WWW-Authenticate": "Bearer"}
+            )
     registry = CollectorRegistry()
     report = await _eval_view(session)
     runs = Gauge(

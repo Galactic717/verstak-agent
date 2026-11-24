@@ -8,6 +8,7 @@ from celery import Celery
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
+from opentelemetry.trace import SpanKind
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -16,7 +17,12 @@ from verstak.config import settings
 from verstak.db import DeadLetter, Run, engine, sessions
 from verstak.documents import document_context, search_context
 from verstak.llm import Router, TransientModelError
-from verstak.observability import configure_logging
+from verstak.observability import (
+    configure_logging,
+    configure_tracing,
+    current_traceparent,
+    trace_span,
+)
 from verstak.store import RUNNABLE, lease_due_runs, record_progress, record_worker_failure
 
 configure_logging()
@@ -102,7 +108,7 @@ async def _execute(run: Run) -> None:
             state = checkpoint_state(snapshot.values)
 
     outcome = state.get("outcome")
-    triage = state.get("triage")
+    triage = state.get("triage") if outcome != "failed" else None
     if outcome is None and triage is None:
         raise RuntimeError("incomplete workflow checkpoint")
     await record_progress(run.id, outcome or "waiting_approval", triage, state.get("error"))
@@ -138,12 +144,20 @@ async def process_run(run_id: UUID) -> None:
 
 
 def _dispatch() -> None:
-    for run_id in asyncio.run(lease_due_runs()):
-        app.send_task("verstak.execute", args=[str(run_id)])
+    configure_tracing("verstak-worker")
+    for dispatch in asyncio.run(lease_due_runs()):
+        with trace_span("workflow.dispatch", parent=dispatch.traceparent, kind=SpanKind.PRODUCER):
+            app.send_task(
+                "verstak.execute",
+                args=[str(dispatch.run_id)],
+                kwargs={"traceparent": current_traceparent()},
+            )
 
 
-def _process(run_id: str) -> None:
-    asyncio.run(process_run(UUID(run_id)))
+def _process(run_id: str, traceparent: str | None = None) -> None:
+    configure_tracing("verstak-worker")
+    with trace_span("workflow.execute", parent=traceparent, kind=SpanKind.CONSUMER):
+        asyncio.run(process_run(UUID(run_id)))
 
 
 dispatch_task: Any = app.task(name="verstak.dispatch")(_dispatch)
