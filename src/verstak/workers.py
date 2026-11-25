@@ -23,7 +23,13 @@ from verstak.observability import (
     current_traceparent,
     trace_span,
 )
-from verstak.store import RUNNABLE, lease_due_runs, record_progress, record_worker_failure
+from verstak.store import (
+    RUNNABLE,
+    lease_due_runs,
+    record_progress,
+    record_worker_failure,
+    recover_committed_case,
+)
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -56,6 +62,8 @@ async def _begin_run(run_id: UUID) -> Run | None:
             return None
         now = datetime.now(UTC)
         if run.retry_at is not None and run.retry_at > now:
+            return None
+        if await recover_committed_case(session, run):
             return None
         if run.status == "running" and run.error is None:
             run.worker_failures += 1
@@ -107,7 +115,8 @@ async def _execute(run: Run) -> None:
         else:
             state = checkpoint_state(snapshot.values)
 
-    outcome = state.get("outcome")
+    checkpoint_outcome = state.get("outcome")
+    outcome = "succeeded" if checkpoint_outcome == "case_pending" else checkpoint_outcome
     triage = state.get("triage") if outcome != "failed" else None
     if outcome is None and triage is None:
         raise RuntimeError("incomplete workflow checkpoint")

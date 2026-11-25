@@ -25,8 +25,8 @@ sequenceDiagram
     Client->>API: Approve or reject
     API->>PG: Persist decision and make run due
     Worker->>Graph: Resume same checkpoint thread
-    Graph->>PG: Insert case action if approved
-    Graph->>PG: Save terminal checkpoint and run status
+    Graph->>PG: Save terminal checkpoint
+    Worker->>PG: Commit terminal run status and case action if approved
 ```
 
 One transaction inserts the submission and dispatch timestamp. Conflicting submissions with the same tenant and idempotency key return HTTP 409 when the normalized request fingerprints differ. Redis carries run IDs. If a broker delivery disappears or the dispatcher loses its connection after committing a lease, a later tick picks up the due row.
@@ -35,7 +35,7 @@ The worker holds a PostgreSQL advisory lock for each run using a dedicated conne
 
 The independent evidence agent checks references as complete tokens and looks for the proposed amount and currency together in the submitted text or attached document. The graph stores both the review and the accepted proposal before the approval interrupt. Unsupported values produce field-specific retry feedback within the same model-call and budget limits. The approver evaluates the proposal's category, summary, and business context. Retrieved knowledge provides classification context while the submitted source supplies evidence for action-driving fields.
 
-Model proposals pick one of three fixed case types. An approval transaction locks the run, checks the authenticated tenant and approval scope, records the deciding identity, and queues the resume. An identical repeat returns the saved decision. The action uses a unique run ID, so replay after a successful action transaction can complete the workflow without a second record.
+Model proposals pick one of three fixed case types. An approval transaction locks the run, checks the authenticated tenant and approval scope, records the deciding identity, and queues the resume. An identical repeat returns the saved decision. After the terminal graph checkpoint, the worker commits the case and the successful run status in one PostgreSQL transaction. The case has a unique run ID. If a previous worker already saved a case in a separate transaction, the next delivery uses it to recover the terminal run status.
 
 ## Persistence
 
@@ -86,7 +86,7 @@ Documents are parsed within file, page, row, and extracted-text limits. PDF extr
 | Failure | Server behavior |
 | --- | --- |
 | Worker dies or broker loses a delivery | The run remains due after the lease expires. A worker reloads the checkpoint and continues while holding the advisory lock. |
-| Worker fails after the action commits | Replaying the action hits the existing case key. The worker updates the run from the terminal checkpoint. |
+| Worker fails around the case commit | Before commit, the worker reuses the terminal checkpoint to retry finalization. After commit, the case and successful run status are durable together. |
 | PostgreSQL drops a connection | A failed transaction rolls back. After PostgreSQL returns, the run is eligible through its lease or retry deadline. |
 | Provider times out or returns a retryable HTTP response | The worker records a retry deadline and backs off exponentially. Stale deliveries honor the deadline. Existing reservations count toward the budget. |
 | Model produces invalid structured output | Up to two corrections fit within a three-call run limit. Exhaustion records a failed run and a dead-letter row. |
@@ -129,4 +129,4 @@ uv run --locked playwright install chromium
 VERSTAK_E2E_BASE_URL=http://127.0.0.1:8000 uv run --locked pytest tests/e2e
 ```
 
-The crash-injection cases interrupt the worker inside the test process against real PostgreSQL and Redis. They cover failures after a committed action, a connection error surfaced at that boundary, a lost checkpoint after model settlement, and provider timeout, malformed output, and budget limits.
+The crash-injection cases interrupt the worker inside the test process against real PostgreSQL and Redis. They cover failures before and after case finalization, a lost checkpoint after model settlement, and provider timeout, malformed output, and budget limits.

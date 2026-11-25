@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -9,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from verstak.config import settings
 from verstak.contracts import GroundingReview, RunStatus
 from verstak.db import CaseAction, DeadLetter, ModelAttempt, Run, sessions
+from verstak.llm import Triage
+from verstak.observability import trace_span
 
 RUNNABLE = ("queued", "running")
 TERMINAL = ("succeeded", "rejected", "failed")
@@ -118,16 +121,30 @@ async def record_verification(
         run.triage = fields if review.accepted else None
 
 
-async def apply_case(run_id: UUID, tenant: str, tool: str, payload: dict[str, object]) -> None:
-    async with sessions().begin() as session:
-        run = await tenant_run(session, tenant, run_id, lock=True)
-        if run is None or run.approved is not True:
-            raise RuntimeError("case action requires persisted approval")
-        await session.execute(
-            insert(CaseAction)
-            .values(run_id=run_id, tenant=tenant, tool=tool, payload=payload)
-            .on_conflict_do_nothing(index_elements=[CaseAction.run_id])
-        )
+def _set_progress(
+    run: Run,
+    status: RunStatus,
+    triage: dict[str, object] | None,
+    error: str | None,
+    finished_at: datetime | None,
+) -> None:
+    run.status = status
+    run.triage = triage
+    run.error = error
+    run.worker_failures = 0
+    run.retry_at = None
+    run.finished_at = finished_at
+
+
+async def recover_committed_case(session: AsyncSession, run: Run) -> bool:
+    if run.status != "running" or run.approved is not True:
+        return False
+    action = await session.get(CaseAction, run.id)
+    if action is None or action.tenant != run.tenant:
+        return False
+    # Older workers could commit the case before recording terminal progress.
+    _set_progress(run, "succeeded", action.payload, None, action.created_at)
+    return True
 
 
 async def record_progress(
@@ -136,19 +153,24 @@ async def record_progress(
     triage: dict[str, object] | None,
     error: str | None,
 ) -> None:
-    async with sessions().begin() as session:
-        run = await session.get_one(Run, run_id, with_for_update=True)
-        if run.status in TERMINAL:
-            return
-        run.status = status
-        run.triage = triage
-        run.error = error
-        run.worker_failures = 0
-        run.retry_at = None
-        if status in TERMINAL:
-            run.finished_at = datetime.now(UTC)
-        if status == "failed":
-            session.add(DeadLetter(run_id=run_id, error=error or "workflow_failed"))
+    with trace_span("workflow.act") if status == "succeeded" else nullcontext():
+        async with sessions().begin() as session:
+            run = await session.get_one(Run, run_id, with_for_update=True)
+            if run.status in TERMINAL:
+                return
+            if status == "succeeded":
+                if run.approved is not True or triage is None:
+                    raise RuntimeError("case action requires persisted approval and a proposal")
+                tool = Triage.model_validate(triage).tool
+                await session.execute(
+                    insert(CaseAction)
+                    .values(run_id=run.id, tenant=run.tenant, tool=tool, payload=triage)
+                    .on_conflict_do_nothing(index_elements=[CaseAction.run_id])
+                )
+            finished_at = datetime.now(UTC) if status in TERMINAL else None
+            _set_progress(run, status, triage, error, finished_at)
+            if status == "failed":
+                session.add(DeadLetter(run_id=run_id, error=error or "workflow_failed"))
 
 
 async def record_worker_failure(run_id: UUID, error: str) -> None:

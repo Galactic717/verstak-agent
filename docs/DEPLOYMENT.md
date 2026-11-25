@@ -58,6 +58,8 @@ curl -fsS "$API_URL/healthz"
 
 Automatic deploys on commits are disabled in the Blueprint. Use the same reviewed Git commit for all three application services. Keep schema migrations compatible with the preceding release so in-flight work continues during rolling deploys. Keep one Beat instance and scale the execution worker independently when needed.
 
+Before upgrading a database from revision `0003_retry_gate` or earlier, pause intake and drain in-flight runs on the previous version. Revision `0004_verification_and_tracing` adds evidence reviews, and an existing approval checkpoint may have no stored review. For a pending proposal that needs the new evidence checks, reject it on the previous version before resubmitting on the upgraded version with a fresh idempotency key.
+
 The API publishes `/metrics` for an authenticated scraper. Configure your scraper to send `Authorization: Bearer <VERSTAK_METRICS_TOKEN>` over HTTPS. The [Compose quickstart](../README.md) runs the Prometheus and Grafana dashboards locally.
 
 The [n8n workflow exports](../n8n_workflows/README.md) can target the deployed API. Use the Render HTTPS URL in the OAuth2 token configuration and in the HTTP Request nodes. Each external integration uses its own credentials.

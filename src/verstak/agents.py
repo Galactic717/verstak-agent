@@ -11,7 +11,6 @@ from verstak.llm import InvalidModelOutput, PermanentModelError, Router, Triage
 from verstak.observability import trace_span
 from verstak.store import (
     RunLimit,
-    apply_case,
     record_verification,
     reserve_attempt,
     saved_proposal,
@@ -28,7 +27,7 @@ class WorkflowState(TypedDict, total=False):
     proposal_sequence: int | None
     correction: str
     approved: bool
-    outcome: Literal["succeeded", "rejected", "failed"]
+    outcome: Literal["case_pending", "succeeded", "rejected", "failed"]
     error: str
 
 
@@ -93,13 +92,11 @@ def build_graph(
             raise ValueError("approval must be a boolean")
         return {"approved": approved}
 
-    async def act(state: WorkflowState) -> WorkflowState:
+    def act(state: WorkflowState) -> WorkflowState:
         if not state["approved"]:
             return {"outcome": "rejected"}
-        triage = Triage.model_validate(state["triage"])
-        with trace_span("workflow.act"):
-            await apply_case(UUID(state["run_id"]), state["tenant"], triage.tool, state["triage"])
-        return {"outcome": "succeeded"}
+        # An older worker must not mistake this checkpoint for a committed case.
+        return {"outcome": "case_pending"}
 
     def route_after_classification(state: WorkflowState) -> Literal["verify", "end"]:
         return "end" if state.get("outcome") == "failed" else "verify"

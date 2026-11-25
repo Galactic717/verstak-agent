@@ -85,7 +85,7 @@ flowchart LR
 ```
 
 - The run row also acts as a durable dispatch record. Beat wakes a dispatcher that leases due rows and sends work to Redis. Stale leases make interrupted work eligible for delivery again.
-- A per-run PostgreSQL advisory lock serializes workers. The graph pauses before the business action and resumes using the same checkpoint thread. A unique key on the case action protects the PostgreSQL effect during replay.
+- A per-run PostgreSQL advisory lock serializes workers. After approval, the worker resumes the same checkpoint thread, then commits the case and successful run status in one transaction. A unique case key protects replay.
 - Pydantic validates the model's tool proposal. The worker reserves spend in integer USD millionths before each model attempt. Each run permits at most three attempts, including corrections.
 - The verification node checks the proposal's reference and matched amount/currency pair against the request or attached document. It persists its decision separately and asks the triage agent to repair unsupported fields within the same attempt and cost limits.
 - Document retrieval fuses PostgreSQL BM25 and pgvector HNSW rankings. The bundled vectorizer uses deterministic lexical features, which keeps the demo reproducible.
@@ -115,4 +115,4 @@ Both Qwen models ran locally in Ollama with a four-CPU limit against the same 30
 
 The local runs incurred $0 in API fees. [Evaluation method and raw reports](evals/README.md)
 
-Local verification passed 78 Python tests at 87.13% line coverage, two Playwright scenarios, and a Jaeger trace smoke test against the Linux Compose stack. All 10 injected post-action failures recovered with one case action per run. All 10 injected evidence errors reached human review after a single correction using the fixture provider. A separate live smoke test killed the worker while approval was pending, then resumed the run with one model attempt and one case action. GitHub Actions runs the integration, failure-injection, Gherkin, browser, and trace suites.
+The Python suite passed 79 tests at 87.35% line coverage against PostgreSQL and Redis. Ten injected failures before and after case finalization recovered with one case action per run. Ten injected evidence errors reached human review after a single correction using the fixture provider. GitHub Actions also runs two Playwright approval scenarios and a Jaeger trace smoke test against the Linux Compose stack.

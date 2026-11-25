@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
 
@@ -13,7 +14,7 @@ from verstak.api import app
 from verstak.config import settings
 from verstak.db import CaseAction, DeadLetter, Run, sessions
 from verstak.llm import InvalidModelOutput, Router, TransientModelError
-from verstak.store import apply_case, lease_due_runs, settle_attempt
+from verstak.store import lease_due_runs, record_progress, settle_attempt
 from verstak.workers import process_run
 
 pytestmark = pytest.mark.integration
@@ -137,9 +138,10 @@ async def test_dispatch_leases_and_redis_quota(
 
 
 @pytest.mark.chaos
-@pytest.mark.parametrize("interruption", range(10))
-async def test_replay_after_action_commit_is_safe(
-    client: httpx.AsyncClient, interruption: int
+@pytest.mark.parametrize("after_commit", [False, True], ids=["before-commit", "after-commit"])
+@pytest.mark.parametrize("interruption", range(5))
+async def test_case_and_status_commit_together_across_worker_failures(
+    client: httpx.AsyncClient, interruption: int, after_commit: bool
 ) -> None:
     run_id = await start(client)
     await process_run(run_id)
@@ -151,20 +153,27 @@ async def test_replay_after_action_commit_is_safe(
     decision = await client.post(f"/approvals/{run_id}", json={"approved": True})
     assert decision.status_code == 200, decision.text
 
-    async def after_commit(*args: object, **kwargs: object) -> None:
-        await apply_case(*args, **kwargs)
+    async def interrupt_finalization(*args: object, **kwargs: object) -> None:
+        if after_commit:
+            await record_progress(*args, **kwargs)
         if interruption % 2:
             raise OperationalError("connection lost", None, OSError("database interrupted"))
-        raise RuntimeError("injected worker interruption after transaction commit")
+        raise RuntimeError("injected worker interruption at case finalization")
 
-    with patch("verstak.agents.apply_case", side_effect=after_commit):
+    with patch("verstak.workers.record_progress", side_effect=interrupt_finalization):
         if interruption % 2:
             with pytest.raises(OperationalError):
                 await process_run(run_id)
         else:
             await process_run(run_id)
-    assert await action_count(run_id) == 1
-    assert (await status(client, run_id))["status"] == "running"
+    assert (await status(client, run_id))["status"] == ("succeeded" if after_commit else "running")
+    assert await action_count(run_id) == int(after_commit)
+    if not after_commit:
+        async with AsyncPostgresSaver.from_conn_string(settings().database_url) as saver:
+            checkpoint = await saver.aget({"configurable": {"thread_id": str(run_id)}})
+        assert checkpoint is not None
+        assert checkpoint["channel_values"]["outcome"] == "case_pending"
+
     await expire_backoff(run_id)
     await asyncio.gather(process_run(run_id), process_run(run_id))
     finished = await status(client, run_id)
@@ -173,6 +182,33 @@ async def test_replay_after_action_commit_is_safe(
     assert await action_count(run_id) == 1
     assert (await client.post(f"/approvals/{run_id}", json={"approved": True})).status_code == 200
     assert (await client.post(f"/approvals/{run_id}", json={"approved": False})).status_code == 409
+
+
+async def test_existing_case_is_recovered_when_the_worker_retry_limit_is_reached(
+    client: httpx.AsyncClient,
+) -> None:
+    run_id = await start(client)
+    await process_run(run_id)
+    proposal = (await status(client, run_id))["triage"]
+    decision = await client.post(f"/approvals/{run_id}", json={"approved": True})
+    assert decision.status_code == 200, decision.text
+
+    async with sessions().begin() as session:
+        run = await session.get_one(Run, run_id)
+        run.status = "running"
+        run.worker_failures = settings().worker_retries
+        session.add(
+            CaseAction(run_id=run_id, tenant=run.tenant, tool=proposal["tool"], payload=proposal)
+        )
+
+    await process_run(run_id)
+
+    finished = await status(client, run_id)
+    assert finished["status"] == "succeeded", finished
+    assert finished["triage"] == proposal
+    assert await action_count(run_id) == 1
+    async with sessions()() as session:
+        assert await session.get(DeadLetter, run_id) is None
 
 
 @pytest.mark.chaos
